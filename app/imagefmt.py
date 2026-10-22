@@ -54,8 +54,9 @@ BASE_DIR = Path(os.environ.get("HMI_BASE_DIR")
 class Base:
     """A pinned portal-base: its reference, image ID and the config it was built with."""
     ref: str                 # "portal-base:1"
-    image_id: str            # "sha256:…", the config digest
+    image_id: str            # "sha256:…", the config digest -- the base's identity
     config: dict
+    aliases: tuple = ()      # earlier names of the same image ("hmi-app-base:1")
 
     @property
     def diff_ids(self) -> list[str]:
@@ -65,6 +66,19 @@ class Base:
     def pinned(self) -> str:
         return f"{self.ref}@{self.image_id}"
 
+    @property
+    def first_pinned(self) -> str:
+        """The name this base was first published under: what a build container from before
+        a rename compares (`spec["base"]`), so a rename never fails a client's build."""
+        return f"{(self.aliases or (self.ref,))[0]}@{self.image_id}"
+
+
+def same_base(a: str | None, b: str | None) -> bool:
+    """Whether two pinned refs ("name:tag@sha256:…") are the same base: by image ID, the
+    identity; a name is only an alias (hmi-app-base:1 and portal-base:1 are one image)."""
+    ident = lambda r: r.rsplit("@", 1)[-1] if isinstance(r, str) and "@sha256:" in r else None
+    return ident(a) is not None and ident(a) == ident(b)
+
 
 def load_base(version: int = 1) -> Base:
     """The base this generator builds against, from buildkit/base/base-<n>.json: docker's
@@ -73,7 +87,8 @@ def load_base(version: int = 1) -> Base:
     raw = rec["config_bytes"].encode()
     if "sha256:" + hashlib.sha256(raw).hexdigest() != rec["image_id"]:
         raise ValueError(f"base-{version}.json: config does not hash to its image_id")
-    return Base(ref=rec["ref"], image_id=rec["image_id"], config=json.loads(raw))
+    return Base(ref=rec["ref"], image_id=rec["image_id"], config=json.loads(raw),
+                aliases=tuple(rec.get("aliases") or ()))
 
 
 def _canon(obj) -> bytes:

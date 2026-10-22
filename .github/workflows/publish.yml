@@ -62,4 +62,7 @@ jobs:
           n="${GITHUB_REF_NAME#build-}"; [ "$n" = "$GITHUB_REF_NAME" ] && n=1
           docker build -t industreal/godot-editor:4.7.2 tools/godot-editor
           sh buildkit/make-build-image.sh ghcr.io/industreal-tech/portal-build:$n
-          docker push ghcr.io/industreal-tech/portal-build:$n
+          # Only our platform: the image is built FROM multi-platform bases (.NET SDK), and a
+          # plain push tries to send their other platforms' blobs too -- "unknown blob" (build-1).
+          docker push --platform linux/amd64 ghcr.io/industreal-tech/portal-build:$n
+          docker buildx imagetools inspect ghcr.io/industreal-tech/portal-build:$n

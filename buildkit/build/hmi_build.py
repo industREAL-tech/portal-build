@@ -15,7 +15,9 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
+import time
 import sys
 import urllib.error
 import urllib.request
@@ -97,12 +99,110 @@ def _steps(src: Path, spec: dict) -> bool:
     return True
 
 
+# A runtime error in the screen's own code, which the build and the static checks cannot see
+# (fruit-slice r2: a typed assignment of a freed node, every frame of the menu -> game cut).
+_SCRIPT_ERROR = re.compile(r"^\s*SCRIPT ERROR:")
+# Godot with a display (the official 4.7.2 build); `godot` is the export toolchain's.
+RENDER_GODOT = os.environ.get("HMI_RENDER_GODOT", "godot-display")
+
+
+def _render(src: Path, spec: dict) -> bool | None:
+    """The screens rendered to out/render/<name>.png from the application's ui/render.json
+    (or the spec's default shots), the daemon running beside the screen as on the panel.
+    True: rendered. False: the screen's code raised a SCRIPT ERROR -- the build fails. None:
+    no picture could be made (no virtual display here, say): reported, not a failure."""
+    r = spec.get("render")
+    if not r:
+        return True
+    out = src / "out" / "render"
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    plan = src / r["plan"]
+    if not plan.is_file():
+        plan = out / "default-plan.json"
+        plan.write_text(json.dumps(r["default"]))
+        print(f"render: no {r['plan']}; rendering the default shots", flush=True)
+    w, h = r["resolution"]
+    shots = [s for s in (json.loads(plan.read_text()).get("shots") or []) if isinstance(s, dict)]
+    last = max([float(s.get("at_s") or 0) for s in shots] or [0])
+    log_path = out / "render.log"
+    procs: list[subprocess.Popen] = []
+    disp = ":97"
+    env = {**os.environ, "DISPLAY": disp, "PLATFORM_RENDER": str(plan),
+           "PLATFORM_RENDER_OUT": str(out), "DOTNET_CLI_TELEMETRY_OPTOUT": "1"}
+    try:
+        with open(log_path, "w") as log:
+            procs.append(subprocess.Popen(["Xvfb", disp, "-screen", "0", f"{w}x{h}x24",
+                                           "-nolisten", "tcp"], stdout=log, stderr=log))
+            sock = Path("/tmp/.X11-unix/X97")
+            for _ in range(50):
+                if sock.exists():
+                    break
+                time.sleep(0.2)
+            else:
+                print("render: no virtual display could be started; nothing rendered", flush=True)
+                return None
+            daemon = src / r["daemon"]
+            if daemon.is_file():
+                procs.append(subprocess.Popen(["dotnet", str(daemon)], cwd=src, env=env,
+                                              stdout=log, stderr=log))
+            argv = [RENDER_GODOT, "--path", str(src / "ui"), "--rendering-driver", "opengl3",
+                    "--display-driver", "x11", "--audio-driver", "Dummy",
+                    "--resolution", f"{w}x{h}", "--fixed-fps", "60"]
+            print(f"render: {len(shots)} shot(s) (first start compiles shaders: 1-2 min)",
+                  flush=True)
+            g = subprocess.run(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, errors="replace", timeout=int(last) + 300)
+            text = _ANSI.sub("", g.stdout or "")
+            log.write(text)
+    except subprocess.TimeoutExpired:
+        print("render: the screen did not finish its shots in time; see out/render/render.log",
+              flush=True)
+        return None
+    except OSError as exc:
+        print(f"render: could not run ({exc}); nothing rendered", flush=True)
+        return None
+    finally:
+        for p in reversed(procs):
+            p.terminate()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+    lines = text.splitlines()
+    errors = []
+    for i, line in enumerate(lines):
+        if _SCRIPT_ERROR.match(line):
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            errors.append(line.strip() + (f"  {nxt}" if nxt.startswith("at:") else ""))
+    pictures = sorted(p.name for p in out.glob("*.png"))
+    for line in lines:
+        if line.startswith("render: shot"):
+            print(line, flush=True)
+    if errors:
+        uniq = list(dict.fromkeys(errors))
+        print(f"render: FAILED -- the screen raised {len(errors)} SCRIPT ERROR(s) "
+              f"({len(uniq)} distinct):", flush=True)
+        for e in uniq[:20]:
+            print(f"  {e}", flush=True)
+        return False
+    if not pictures:
+        print("render: no pictures were made (did the screen start?); see "
+              "out/render/render.log", flush=True)
+        return None
+    print(f"render: {len(pictures)} picture(s) in out/render/: {', '.join(pictures)} -- "
+          f"look at every one before calling ireal_build", flush=True)
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="hmi-build")
     ap.add_argument("command", choices=["build"])
     ap.add_argument("--spec", required=True, help="the run's build-spec URL, from the step")
     ap.add_argument("--upload", help="the run's image URL; without it the image stays local")
     ap.add_argument("--src", default="/src")
+    ap.add_argument("--no-render", action="store_true",
+                    help="skip rendering the screens (the build itself is unchanged)")
     a = ap.parse_args()
 
     # A writable home for dotnet and Godot when the container runs as the user's uid.
@@ -118,11 +218,20 @@ def main() -> int:
     src = Path(a.src)
     spec = _get(a.spec)
     base = imagefmt.load_base()
-    if spec.get("base") != base.pinned:
-        sys.exit(f"hmi-build: this build container builds on {base.pinned}, the server "
-                 f"expects {spec.get('base')}: run the image the step names")
+    # The base's identity is its image ID; names are aliases (a renamed base is the same
+    # image). Only a different image is a mismatch, and the message says what to run.
+    want = spec.get("base_id") or str(spec.get("base", "")).rsplit("@", 1)[-1]
+    if want != base.image_id:
+        sys.exit(f"hmi-build: this build container builds on {base.pinned}; the server builds "
+                 f"on {spec.get('base')}. Run exactly the container the step names"
+                 + (f": {spec['build_image']} (docker pull {spec['build_image']})"
+                    if spec.get("build_image") else "") + ".")
     if not _steps(src, spec):
         print("hmi-build: the build failed; nothing was uploaded", flush=True)
+        return 1
+    if not a.no_render and _render(src, spec) is False:
+        print("hmi-build: the build failed (runtime errors in the screen); nothing was "
+              "uploaded", flush=True)
         return 1
 
     layer = imagefmt.layer_from_tree([(src / rel, inner) for rel, inner in spec["layer"]])

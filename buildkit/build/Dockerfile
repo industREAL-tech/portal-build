@@ -26,6 +26,20 @@ RUN t=/opt/godot-data/godot/export_templates/${GODOT_TEMPLATE_DIR} \
     && chmod -R a+rwX /opt/godot-data \
     && godot --headless --version
 
+# Rendering the screens (hmi_build.py `_render`): a virtual display and software OpenGL
+# (Mesa llvmpipe), and a Godot that can draw -- the editor above is headless-only. It is the
+# official 4.7.2 build, the same version, so it reads the import cache the export step made.
+# Not run here at image build time: it needs SSE4.2, which our build server's CPU lacks; the
+# machines that build applications all have it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb xauth libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 \
+        libxcursor1 libxinerama1 libxrandr2 libxi6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip \
+    && unzip -q /tmp/godot.zip -d /tmp/godot \
+    && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot-display \
+    && rm -rf /tmp/godot /tmp/godot.zip
+
 COPY build/hmi_build.py imagefmt.py /opt/hmi-build/
 COPY base/base-1.json /opt/hmi-build/base/
 ENV HMI_BASE_DIR=/opt/hmi-build/base \
