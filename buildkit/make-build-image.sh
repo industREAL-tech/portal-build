@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build the portal-build container (docs/CLIENT-BUILD.md) from this repository:
 #   buildkit/make-build-image.sh [tag]
-# Needs industreal/godot-editor:4.7.2 locally (tools/godot-editor). Published to GHCR by CI.
+# Needs a CPU with SSE4.2 (the official Godot editor checks it). Published to GHCR by CI.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 ctx=$(mktemp -d)

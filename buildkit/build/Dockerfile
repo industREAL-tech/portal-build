@@ -9,13 +9,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 libfontconfig1 libfreetype6 curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Godot as in the codegen image: our build of the 4.7.2 editor (the official x86_64 binary
-# needs SSE4.2) and the official linux arm64 release export template, untouched. The
-# templates sit under a world-readable XDG_DATA_HOME because the container runs as the
-# user's uid, whose home is not root's.
+# Godot: the official 4.7.2 x86_64 editor, for the export and the render alike, and the
+# official linux arm64 release export template, untouched. The official binary needs SSE4.2,
+# which every machine that builds applications has (the codegen server, whose CPU lacks it,
+# no longer builds them; it keeps its own patched editor, tools/godot-editor). The templates
+# sit under a world-readable XDG_DATA_HOME because the container runs as the user's uid,
+# whose home is not root's.
 ARG GODOT_VERSION=4.7.2-stable
 ARG GODOT_TEMPLATE_DIR=4.7.2.stable
-COPY --from=industreal/godot-editor:4.7.2 /godot /usr/local/bin/godot
+RUN curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip \
+    && unzip -q /tmp/godot.zip -d /tmp/godot \
+    && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot \
+    && ln -s godot /usr/local/bin/godot-display \
+    && rm -rf /tmp/godot /tmp/godot.zip
 ENV XDG_DATA_HOME=/opt/godot-data
 RUN t=/opt/godot-data/godot/export_templates/${GODOT_TEMPLATE_DIR} \
     && mkdir -p $t \
@@ -27,18 +33,11 @@ RUN t=/opt/godot-data/godot/export_templates/${GODOT_TEMPLATE_DIR} \
     && godot --headless --version
 
 # Rendering the screens (hmi_build.py `_render`): a virtual display and software OpenGL
-# (Mesa llvmpipe), and a Godot that can draw -- the editor above is headless-only. It is the
-# official 4.7.2 build, the same version, so it reads the import cache the export step made.
-# Not run here at image build time: it needs SSE4.2, which our build server's CPU lacks; the
-# machines that build applications all have it.
+# (Mesa llvmpipe) for the same Godot (`godot-display`, kept as a name for hmi_build).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         xvfb xauth libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 \
         libxcursor1 libxinerama1 libxrandr2 libxi6 \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip \
-    && unzip -q /tmp/godot.zip -d /tmp/godot \
-    && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot-display \
-    && rm -rf /tmp/godot /tmp/godot.zip
+    && rm -rf /var/lib/apt/lists/*
 
 COPY build/hmi_build.py imagefmt.py /opt/hmi-build/
 COPY base/base-1.json /opt/hmi-build/base/
