@@ -179,6 +179,24 @@ def _render(src: Path, spec: dict) -> bool | None:
     for line in lines:
         if line.startswith("render: shot"):
             print(line, flush=True)
+    calls = [int(m.group(1)) for m in re.finditer(r"render: shot \S+ at [0-9.]+ s, (\d+) draw calls", text)]
+    # The host's budget (60 fps) and ceiling, from its measured capacity: each draw call
+    # costs ~0.2 ms of the panel's frame (drawcall-bench, 2026-10-22).
+    budget, limit = r.get("draw_calls"), r.get("max_draw_calls")
+    how = ("backgrounds from the theme (Tile* variations for coloured cells, never a "
+           "StyleBoxFlat or a differing modulate per item), "
+           "the text of repeated cells as a Label child with z_index 1, hand-drawn shapes "
+           "through IrShapes")
+    if calls:
+        print(f"render: at most {max(calls)} draw calls in a shot"
+              + (f" (budget {budget}, limit {limit})" if limit else ""), flush=True)
+    if limit and calls and max(calls) > limit:
+        print(f"render: FAILED -- {max(calls)} draw calls in one frame, over the panel's {limit} "
+              f"(~{max(calls) * 0.2:.0f} ms of a 16.7 ms frame): batch them -- {how}", flush=True)
+        return False
+    if budget and calls and max(calls) > budget:
+        print(f"render: WARNING -- {max(calls)} draw calls is over the panel's 60 fps budget of "
+              f"{budget} (~{max(calls) * 0.2:.0f} ms of a 16.7 ms frame): {how}", flush=True)
     if errors:
         uniq = list(dict.fromkeys(errors))
         print(f"render: FAILED -- the screen raised {len(errors)} SCRIPT ERROR(s) "
