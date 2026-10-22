@@ -1,7 +1,7 @@
 # hmi-build -- what a user's machine builds an industREAL HMI application with
 # (docs/CLIENT-BUILD.md). The toolchain the codegen service used to build with on the
 # server, plus hmi_build.py and imagefmt.py, which assemble the application image over
-# the pinned hmi-app-base exactly as the server checks it.
+# the pinned portal-base exactly as the server checks it.
 #
 # Build context: buildkit/ with app/imagefmt.py copied in (buildkit/make-build-image.sh).
 FROM mcr.microsoft.com/dotnet/sdk:10.0

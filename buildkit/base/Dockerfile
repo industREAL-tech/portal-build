@@ -1,4 +1,4 @@
-# hmi-app-base -- what every generated application runs on (docs/CLIENT-BUILD.md).
+# portal-base -- what every generated application runs on (docs/CLIENT-BUILD.md).
 #
 # Built ONCE per version for linux/arm64 and pinned by digest everywhere: the build
 # container carries its config and layer ids, the panel loads it from its own signed RAUC
@@ -42,4 +42,6 @@ ENV DOTNET_ROOT=/usr/share/dotnet \
     DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
     EGL_PLATFORM=wayland \
     LD_LIBRARY_PATH=/gpu
-LABEL tech.industreal.base="hmi-app-base"
+# The label's value is part of the image ID: base 1 was built as hmi-app-base and keeps that
+# value (renamed portal-base 2026-10-22, owner); from base 2 it is portal-base.
+LABEL tech.industreal.base="portal-base"

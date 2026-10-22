@@ -1,4 +1,4 @@
-"""Application images: the application's own files as ONE layer over hmi-app-base, written
+"""Application images: the application's own files as ONE layer over portal-base, written
 without a docker daemon and byte-for-byte reproducibly (docs/CLIENT-BUILD.md).
 
 The same code runs in two places:
@@ -52,8 +52,8 @@ BASE_DIR = Path(os.environ.get("HMI_BASE_DIR")
 
 @dataclass
 class Base:
-    """A pinned hmi-app-base: its reference, image ID and the config it was built with."""
-    ref: str                 # "hmi-app-base:1"
+    """A pinned portal-base: its reference, image ID and the config it was built with."""
+    ref: str                 # "portal-base:1"
     image_id: str            # "sha256:…", the config digest
     config: dict
 
