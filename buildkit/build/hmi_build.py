@@ -183,10 +183,9 @@ def _render(src: Path, spec: dict) -> bool | None:
     # The host's budget (60 fps) and ceiling, from its measured capacity: each draw call
     # costs ~0.2 ms of the panel's frame (drawcall-bench, 2026-10-22).
     budget, limit = r.get("draw_calls"), r.get("max_draw_calls")
-    how = ("backgrounds from the theme (Tile* variations for coloured cells, never a "
-           "StyleBoxFlat or a differing modulate per item), "
-           "the text of repeated cells as a Label child with z_index 1, hand-drawn shapes "
-           "through IrShapes")
+    how = ("the text of repeated cells as a Label child with z_index 1 so the boxes draw "
+           "first, fewer boxes (one per cell, from the theme), hand-drawn shapes through "
+           "IrShapes")
     if calls:
         print(f"render: at most {max(calls)} draw calls in a shot"
               + (f" (budget {budget}, limit {limit})" if limit else ""), flush=True)
