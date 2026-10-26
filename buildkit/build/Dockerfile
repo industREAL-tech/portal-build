@@ -9,14 +9,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 libfontconfig1 libfreetype6 curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Godot: the official 4.7.2 x86_64 editor, for the export and the render alike, and the
-# official linux arm64 release export template, untouched. The official binary needs SSE4.2,
+# Godot: the official 4.7.2 x86_64 editor, for the export and the render alike, and OUR linux
+# arm64 release export template: Godot 4.7.2 with buildkit/godot/patches applied (the panel's
+# GPU spends ~11 ms of a full-screen frame on the stock scene shader's colour epilogue), built
+# by buildkit/godot/build-template.sh and published as a release asset of this repository,
+# pinned by its sha256. The renders still come from the stock editor, so an unshaded colour
+# there can be up to 2/255 darker (7/255 in near-black) than on the panel. The official binary needs SSE4.2,
 # which every machine that builds applications has (the codegen server, whose CPU lacks it,
 # no longer builds them; it keeps its own patched editor, tools/godot-editor). The templates
 # sit under a world-readable XDG_DATA_HOME because the container runs as the user's uid,
 # whose home is not root's.
 ARG GODOT_VERSION=4.7.2-stable
 ARG GODOT_TEMPLATE_DIR=4.7.2.stable
+ARG PANEL_TEMPLATE=https://github.com/industREAL-tech/portal-build/releases/download/godot-4.7.2-ir1/linux_release.arm64
+ARG PANEL_TEMPLATE_SHA256=327cd47bd0416420ecfa1b730dec3f1b3546593135de341a0e7a97b3e02f9ee5
 RUN curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip \
     && unzip -q /tmp/godot.zip -d /tmp/godot \
     && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot \
@@ -29,6 +35,8 @@ RUN t=/opt/godot-data/godot/export_templates/${GODOT_TEMPLATE_DIR} \
     && unzip -q -j /tmp/templates.tpz templates/linux_release.arm64 templates/version.txt -d $t \
     && rm -f /tmp/templates.tpz \
     && test "$(cat $t/version.txt)" = "${GODOT_TEMPLATE_DIR}" \
+    && curl -fsSL -o $t/linux_release.arm64 ${PANEL_TEMPLATE} \
+    && echo "${PANEL_TEMPLATE_SHA256}  $t/linux_release.arm64" | sha256sum -c - \
     && chmod -R a+rwX /opt/godot-data \
     && godot --headless --version
 
