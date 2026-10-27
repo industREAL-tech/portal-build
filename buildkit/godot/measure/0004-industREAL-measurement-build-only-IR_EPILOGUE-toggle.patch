@@ -1,0 +1,104 @@
+From 4a215625a2ddbc72bced643de4d409b484fe51b5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zal=C3=A1n=20Demeter?= <zalan.demeter@industreal.tech>
+Date: Tue, 27 Oct 2026 10:05:56 +0100
+Subject: [PATCH 4/4] industREAL measurement build only: IR_EPILOGUE toggles
+ for 0001-0003 (not shipped)
+
+t, e, s turn 0001, 0002, 0003 off; c clamps 0003's output on every render
+target instead of only floating-point ones.
+---
+ drivers/gles3/rasterizer_scene_gles3.cpp | 27 ++++++++++++++++++++++--
+ drivers/gles3/shaders/scene.glsl         |  6 ++++--
+ 2 files changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gles3/rasterizer_scene_gles3.cpp b/drivers/gles3/rasterizer_scene_gles3.cpp
+index d02525e..c9aaadb 100644
+--- a/drivers/gles3/rasterizer_scene_gles3.cpp
++++ b/drivers/gles3/rasterizer_scene_gles3.cpp
+@@ -33,6 +33,7 @@
+ #ifdef GLES3_ENABLED
+ 
+ #include "core/config/project_settings.h"
++#include "core/os/os.h"
+ #include "core/templates/sort_array.h"
+ #include "drivers/gles3/effects/copy_effects.h"
+ #include "drivers/gles3/effects/cubemap_filter.h"
+@@ -2831,13 +2832,29 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 
+ 		// The linear tonemapper returns its input unchanged, so leave the tonemapping code out
+ 		// rather than branch on the tonemapper per pixel.
+-		if (!apply_environment_effects_in_post && tonemap_ubo.tonemapper != int32_t(RSE::ENV_TONE_MAPPER_LINEAR)) {
++		// industREAL measurement build only (patch 0099): IR_EPILOGUE in the environment turns
++		// changes off one by one: t = tonemap (0001), e = exposure (0002), s = sRGB round trip
++		// (0003); c = clamp 0003's output on every target, not only float ones. Unset or empty:
++		// as shipped.
++		static const String ir_epilogue = OS::get_singleton()->get_environment("IR_EPILOGUE");
++		static const bool ir_no_tonemap = ir_epilogue.contains_char('t');
++		static const bool ir_no_exposure = ir_epilogue.contains_char('e');
++		static const bool ir_no_srgb = ir_epilogue.contains_char('s');
++		static const bool ir_force_clamp = ir_epilogue.contains_char('c');
++		static bool ir_logged = false;
++		if (!ir_logged) {
++			ir_logged = true;
++			print_line(vformat("IR_EPILOGUE='%s': tonemap %s, exposure %s, srgb %s, clamp %s", ir_epilogue,
++					ir_no_tonemap ? "off" : "on", ir_no_exposure ? "off" : "on", ir_no_srgb ? "off" : "on", ir_force_clamp ? "always" : "float targets"));
++		}
++
++		if (!apply_environment_effects_in_post && (ir_no_tonemap || tonemap_ubo.tonemapper != int32_t(RSE::ENV_TONE_MAPPER_LINEAR))) {
+ 			spec_constant_base_flags |= SceneShaderGLES3::APPLY_TONEMAPPING;
+ 		}
+ 
+ 		// Multiplying by an exposure and a luminance multiplier of 1.0 changes nothing, so leave
+ 		// both multiplications (and their per-pixel uniform reads) out.
+-		if (tonemap_ubo.exposure == 1.0f && render_data.luminance_multiplier == 1.0f) {
++		if (!ir_no_exposure && tonemap_ubo.exposure == 1.0f && render_data.luminance_multiplier == 1.0f) {
+ 			spec_constant_base_flags |= SceneShaderGLES3::NEUTRAL_EXPOSURE;
+ 		}
+ 
+@@ -2845,6 +2862,12 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 		if (rt != nullptr && rt->color_type == GL_FLOAT) {
+ 			spec_constant_base_flags |= SceneShaderGLES3::FLOAT_RENDER_TARGET;
+ 		}
++		if (ir_no_srgb) {
++			spec_constant_base_flags |= SceneShaderGLES3::IR_NO_SKIP_SRGB;
++		}
++		if (ir_force_clamp) {
++			spec_constant_base_flags |= SceneShaderGLES3::IR_FORCE_CLAMP;
++		}
+ 	}
+ 
+ 	if (draw_feed && camera_feed_id > -1) {
+diff --git a/drivers/gles3/shaders/scene.glsl b/drivers/gles3/shaders/scene.glsl
+index 7f5bd66..da7025d 100644
+--- a/drivers/gles3/shaders/scene.glsl
++++ b/drivers/gles3/shaders/scene.glsl
+@@ -34,6 +34,8 @@ USE_ADDITIVE_LIGHTING = false
+ APPLY_TONEMAPPING = true
+ NEUTRAL_EXPOSURE = false
+ FLOAT_RENDER_TARGET = false
++IR_NO_SKIP_SRGB = false
++IR_FORCE_CLAMP = false
+ // We can only use one type of light per additive pass. This means that if USE_ADDITIVE_LIGHTING is defined, and
+ // these are false, we are doing a directional light pass.
+ ADDITIVE_OMNI = false
+@@ -2189,7 +2191,7 @@ vec4 textureArray_bicubic(sampler2DArray tex, vec3 uv, vec2 texture_size) {
+ // conversion back to sRGB (no tonemapping code, exposure and luminance multiplier of 1.0, no fog)
+ // would convert every pixel to linear and straight back. Skip both conversions: the result is
+ // the colour the shader wrote, exactly, instead of the approximated round trip of it.
+-#if defined(BASE_PASS) && defined(MODE_UNSHADED) && !defined(RENDER_MATERIAL) && !defined(USE_ADDITIVE_LIGHTING) && !defined(APPLY_TONEMAPPING) && defined(NEUTRAL_EXPOSURE) && (defined(FOG_DISABLED) || (defined(DISABLE_FOG) && !defined(CUSTOM_FOG_USED)))
++#if defined(BASE_PASS) && defined(MODE_UNSHADED) && !defined(RENDER_MATERIAL) && !defined(USE_ADDITIVE_LIGHTING) && !defined(APPLY_TONEMAPPING) && defined(NEUTRAL_EXPOSURE) && (defined(FOG_DISABLED) || (defined(DISABLE_FOG) && !defined(CUSTOM_FOG_USED))) && !defined(IR_NO_SKIP_SRGB)
+ #define SKIP_SRGB_ROUND_TRIP
+ #endif
+ 
+@@ -2810,7 +2812,7 @@ void main() {
+ 	frag_color.rgb = apply_tonemapping(frag_color.rgb);
+ #endif
+ #ifdef SKIP_SRGB_ROUND_TRIP
+-#ifdef FLOAT_RENDER_TARGET
++#if defined(FLOAT_RENDER_TARGET) || defined(IR_FORCE_CLAMP)
+ 	// linear_to_srgb() clamps negative values to 0; a normalized target clamps them by itself.
+ 	frag_color.rgb = max(frag_color.rgb, vec3(0.0));
+ #endif
+-- 
+2.43.0
+

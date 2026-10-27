@@ -1,0 +1,76 @@
+From a3f4687abe0b04ae0e9410be7299e15a777d8d21 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zal=C3=A1n=20Demeter?= <zalan.demeter@industreal.tech>
+Date: Tue, 27 Oct 2026 10:03:52 +0100
+Subject: [PATCH 2/4] GLES3: Leave neutral exposure out of the scene shader
+
+When the exposure and the luminance multiplier are both 1.0, the scene shader
+still reads both from uniform buffers and multiplies every pixel by them. Add a
+NEUTRAL_EXPOSURE specialization that leaves the multiplications out in that
+case. Multiplying by 1.0 is exact, so the output is bit-identical.
+---
+ drivers/gles3/rasterizer_scene_gles3.cpp | 6 ++++++
+ drivers/gles3/shaders/scene.glsl         | 7 +++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/drivers/gles3/rasterizer_scene_gles3.cpp b/drivers/gles3/rasterizer_scene_gles3.cpp
+index 9ce318f..484aea6 100644
+--- a/drivers/gles3/rasterizer_scene_gles3.cpp
++++ b/drivers/gles3/rasterizer_scene_gles3.cpp
+@@ -2834,6 +2834,12 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 		if (!apply_environment_effects_in_post && tonemap_ubo.tonemapper != int32_t(RSE::ENV_TONE_MAPPER_LINEAR)) {
+ 			spec_constant_base_flags |= SceneShaderGLES3::APPLY_TONEMAPPING;
+ 		}
++
++		// Multiplying by an exposure and a luminance multiplier of 1.0 changes nothing, so leave
++		// both multiplications (and their per-pixel uniform reads) out.
++		if (tonemap_ubo.exposure == 1.0f && render_data.luminance_multiplier == 1.0f) {
++			spec_constant_base_flags |= SceneShaderGLES3::NEUTRAL_EXPOSURE;
++		}
+ 	}
+ 
+ 	if (draw_feed && camera_feed_id > -1) {
+diff --git a/drivers/gles3/shaders/scene.glsl b/drivers/gles3/shaders/scene.glsl
+index cd210e8..42153dc 100644
+--- a/drivers/gles3/shaders/scene.glsl
++++ b/drivers/gles3/shaders/scene.glsl
+@@ -32,6 +32,7 @@ LIGHT_USE_PSSM_BLEND = false
+ BASE_PASS = true
+ USE_ADDITIVE_LIGHTING = false
+ APPLY_TONEMAPPING = true
++NEUTRAL_EXPOSURE = false
+ // We can only use one type of light per additive pass. This means that if USE_ADDITIVE_LIGHTING is defined, and
+ // these are false, we are doing a directional light pass.
+ ADDITIVE_OMNI = false
+@@ -2791,7 +2792,9 @@ void main() {
+ #endif // !FOG_DISABLED
+ 
+ 	// Tonemap before writing as we are writing to an sRGB framebuffer
++#ifndef NEUTRAL_EXPOSURE
+ 	frag_color.rgb *= exposure;
++#endif
+ #ifdef APPLY_TONEMAPPING
+ 	frag_color.rgb = apply_tonemapping(frag_color.rgb);
+ #endif
+@@ -3063,7 +3066,9 @@ void main() {
+ #endif // !FOG_DISABLED
+ 
+ 	// Tonemap before writing as we are writing to an sRGB framebuffer
++#ifndef NEUTRAL_EXPOSURE
+ 	additive_light_color *= exposure;
++#endif
+ #ifdef APPLY_TONEMAPPING
+ 	additive_light_color = apply_tonemapping(additive_light_color);
+ #endif
+@@ -3071,7 +3076,9 @@ void main() {
+ 
+ 	frag_color.rgb += additive_light_color;
+ #endif // USE_ADDITIVE_LIGHTING
++#ifndef NEUTRAL_EXPOSURE
+ 	frag_color.rgb *= scene_data_block.data.luminance_multiplier;
++#endif
+ 
+ #endif // !RENDER_MATERIAL
+ #endif // !MODE_RENDER_DEPTH
+-- 
+2.43.0
+

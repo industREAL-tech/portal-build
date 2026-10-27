@@ -31,12 +31,12 @@ for arch in $archs; do
         x86_64) sdk='$SDK_X86_64' ;;
         *) echo "unknown arch $arch" >&2; exit 2 ;;
     esac
-    docker run --rm -v "$src:/src" -v "$out:/out" -w /src "$IMAGE" sh -c "
+    # As the calling user, so the objects under <out-dir>/work stay removable without root.
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$src:/src" -v "$out:/out" -w /src "$IMAGE" sh -c "
         set -e
         export PATH=$sdk/bin:\$PATH
         scons -j\$(nproc) platform=linuxbsd arch=$arch target=template_release production=yes \
             accesskit=no progress=no warnings=no
-        cp bin/godot.linuxbsd.template_release.$arch /out/linux_release.$arch
-        chown $(id -u):$(id -g) /out/linux_release.$arch"
+        cp bin/godot.linuxbsd.template_release.$arch /out/linux_release.$arch"
 done
 (cd "$out" && sha256sum linux_release.* > SHA256SUMS && cat SHA256SUMS)

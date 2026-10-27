@@ -1,0 +1,33 @@
+From e979df2a3cc304cdf0057c20b24da144291fee35 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zal=C3=A1n=20Demeter?= <zalan.demeter@industreal.tech>
+Date: Tue, 27 Oct 2026 10:03:43 +0100
+Subject: [PATCH 1/4] GLES3: Compile tonemapping out of the scene shader for
+ the linear tonemapper
+
+apply_tonemapping() returns its input unchanged for TONEMAPPER_LINEAR, but the
+scene shader still evaluates the tonemapper selection for every pixel. Only
+define APPLY_TONEMAPPING when a non-linear tonemapper is in use. The output is
+bit-identical; the variant without APPLY_TONEMAPPING already exists (it is used
+when environment effects are applied in post).
+---
+ drivers/gles3/rasterizer_scene_gles3.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gles3/rasterizer_scene_gles3.cpp b/drivers/gles3/rasterizer_scene_gles3.cpp
+index bf41012..9ce318f 100644
+--- a/drivers/gles3/rasterizer_scene_gles3.cpp
++++ b/drivers/gles3/rasterizer_scene_gles3.cpp
+@@ -2829,7 +2829,9 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 			spec_constant_base_flags |= SceneShaderGLES3::USE_DEPTH_FOG;
+ 		}
+ 
+-		if (!apply_environment_effects_in_post) {
++		// The linear tonemapper returns its input unchanged, so leave the tonemapping code out
++		// rather than branch on the tonemapper per pixel.
++		if (!apply_environment_effects_in_post && tonemap_ubo.tonemapper != int32_t(RSE::ENV_TONE_MAPPER_LINEAR)) {
+ 			spec_constant_base_flags |= SceneShaderGLES3::APPLY_TONEMAPPING;
+ 		}
+ 	}
+-- 
+2.43.0
+

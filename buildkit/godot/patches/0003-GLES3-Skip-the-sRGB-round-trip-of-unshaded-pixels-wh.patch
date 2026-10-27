@@ -1,0 +1,95 @@
+From 4f0254b4209d126f3e0cbca0d4ae93ee2c097bd1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zal=C3=A1n=20Demeter?= <zalan.demeter@industreal.tech>
+Date: Tue, 27 Oct 2026 10:04:07 +0100
+Subject: [PATCH 3/4] GLES3: Skip the sRGB round trip of unshaded pixels when
+ nothing changes them
+
+An unshaded base pass converts the colour the shader wrote to linear and, when
+no tonemapping code is compiled in, the exposure and luminance multiplier are
+1.0 and there is no fog, straight back to sRGB. The two approximations used for
+the conversions are not exact inverses, so the colour shown differs from the
+colour written (up to 7/255 in dark colours, #96633), and on mobile GPUs the
+pow() in linear_to_srgb() is a large part of the cost of an unshaded pixel.
+
+Skip both conversions in that case. The colour written is now shown exactly, as
+in the Forward+ renderer. On a floating-point render target negative values are still
+clamped to 0, as linear_to_srgb() does; normalized targets clamp them by
+themselves, so they skip the clamp (FLOAT_RENDER_TARGET specialization).
+---
+ drivers/gles3/rasterizer_scene_gles3.cpp |  5 +++++
+ drivers/gles3/shaders/scene.glsl         | 18 ++++++++++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/drivers/gles3/rasterizer_scene_gles3.cpp b/drivers/gles3/rasterizer_scene_gles3.cpp
+index 484aea6..d02525e 100644
+--- a/drivers/gles3/rasterizer_scene_gles3.cpp
++++ b/drivers/gles3/rasterizer_scene_gles3.cpp
+@@ -2840,6 +2840,11 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 		if (tonemap_ubo.exposure == 1.0f && render_data.luminance_multiplier == 1.0f) {
+ 			spec_constant_base_flags |= SceneShaderGLES3::NEUTRAL_EXPOSURE;
+ 		}
++
++		// Only a floating-point target keeps negative values; normalized ones clamp them to 0.
++		if (rt != nullptr && rt->color_type == GL_FLOAT) {
++			spec_constant_base_flags |= SceneShaderGLES3::FLOAT_RENDER_TARGET;
++		}
+ 	}
+ 
+ 	if (draw_feed && camera_feed_id > -1) {
+diff --git a/drivers/gles3/shaders/scene.glsl b/drivers/gles3/shaders/scene.glsl
+index 42153dc..7f5bd66 100644
+--- a/drivers/gles3/shaders/scene.glsl
++++ b/drivers/gles3/shaders/scene.glsl
+@@ -33,6 +33,7 @@ BASE_PASS = true
+ USE_ADDITIVE_LIGHTING = false
+ APPLY_TONEMAPPING = true
+ NEUTRAL_EXPOSURE = false
++FLOAT_RENDER_TARGET = false
+ // We can only use one type of light per additive pass. This means that if USE_ADDITIVE_LIGHTING is defined, and
+ // these are false, we are doing a directional light pass.
+ ADDITIVE_OMNI = false
+@@ -2184,6 +2185,14 @@ vec4 textureArray_bicubic(sampler2DArray tex, vec3 uv, vec2 texture_size) {
+ #endif //LIGHTMAP_BICUBIC_FILTER
+ #endif // RENDER_MOTION_VECTORS
+ 
++// An unshaded base pass whose colour nothing changes between the conversion to linear and the
++// conversion back to sRGB (no tonemapping code, exposure and luminance multiplier of 1.0, no fog)
++// would convert every pixel to linear and straight back. Skip both conversions: the result is
++// the colour the shader wrote, exactly, instead of the approximated round trip of it.
++#if defined(BASE_PASS) && defined(MODE_UNSHADED) && !defined(RENDER_MATERIAL) && !defined(USE_ADDITIVE_LIGHTING) && !defined(APPLY_TONEMAPPING) && defined(NEUTRAL_EXPOSURE) && (defined(FOG_DISABLED) || (defined(DISABLE_FOG) && !defined(CUSTOM_FOG_USED)))
++#define SKIP_SRGB_ROUND_TRIP
++#endif
++
+ void main() {
+ #ifndef RENDER_MOTION_VECTORS
+ 	//lay out everything, whatever is unused is optimized away anyway
+@@ -2395,9 +2404,11 @@ void main() {
+ 	uint fog_ba = packHalf2x16(fog.ba);
+ #endif // !FOG_DISABLED
+ 
++#ifndef SKIP_SRGB_ROUND_TRIP
+ 	// Convert colors to linear
+ 	albedo = srgb_to_linear(albedo);
+ 	emission = srgb_to_linear(emission);
++#endif
+ 	// TODO Backlight and transmittance when used
+ #ifndef MODE_UNSHADED
+ 	vec3 f0 = F0(metallic, specular, albedo);
+@@ -2798,7 +2809,14 @@ void main() {
+ #ifdef APPLY_TONEMAPPING
+ 	frag_color.rgb = apply_tonemapping(frag_color.rgb);
+ #endif
++#ifdef SKIP_SRGB_ROUND_TRIP
++#ifdef FLOAT_RENDER_TARGET
++	// linear_to_srgb() clamps negative values to 0; a normalized target clamps them by itself.
++	frag_color.rgb = max(frag_color.rgb, vec3(0.0));
++#endif
++#else
+ 	frag_color.rgb = linear_to_srgb(frag_color.rgb);
++#endif
+ 
+ #else // !BASE_PASS
+ 	frag_color = vec4(0.0, 0.0, 0.0, alpha);
+-- 
+2.43.0
+
