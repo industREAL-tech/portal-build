@@ -1,0 +1,118 @@
+From 66f516a168b9a76c7df34f07f256b49ce2d3218e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zal=C3=A1n=20Demeter?= <zalan.demeter@industreal.tech>
+Date: Tue, 27 Oct 2026 19:49:22 +0100
+Subject: [PATCH] GLES3: Make a direct-to-screen root viewport show its frames
+
+RenderingServer.viewport_set_render_direct_to_screen() lets the compatibility
+renderer draw a window's viewport straight into the window's framebuffer
+instead of into a render target that is then copied to the window. On
+Wayland/GLES3 the window kept showing the boot splash, for three reasons:
+
+- OpenGL presents a window (gl_end_frame -> swap_buffers) only after blitting
+  a viewport to it, and a direct-to-screen viewport is not blitted, so its
+  window was never swapped. It is now swapped after the viewport is drawn.
+- The scene and the canvas draw render targets upside down, for the blit to
+  flip back. A direct-to-screen target has no blit, so both now draw it right
+  side up, as for an overridden colour texture: the scene's projection and
+  winding (switched after the shadow pass, whose output is unchanged), the
+  canvas's Y scale and its clip rectangles (scissor rows).
+- After the depth pre-pass the colour buffer is switched back on with
+  GL_COLOR_ATTACHMENT0, which is an error on the window's framebuffer (0),
+  so its GL_NONE stayed and nothing was drawn. Framebuffer 0 gets GL_BACK.
+
+Nothing changes for a viewport that is not direct to screen. Screen-reading
+features (screen and depth textures, BackBufferCopy, CanvasGroup) and reading
+the viewport's texture still need a render target, as before.
+---
+ drivers/gles3/rasterizer_canvas_gles3.cpp | 13 +++++++++++--
+ drivers/gles3/rasterizer_scene_gles3.cpp  | 12 +++++++++++-
+ servers/rendering/renderer_viewport.cpp   |  5 +++++
+ 3 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gles3/rasterizer_canvas_gles3.cpp b/drivers/gles3/rasterizer_canvas_gles3.cpp
+index 3b57052..b3f4931 100644
+--- a/drivers/gles3/rasterizer_canvas_gles3.cpp
++++ b/drivers/gles3/rasterizer_canvas_gles3.cpp
+@@ -327,7 +327,10 @@ void RasterizerCanvasGLES3::canvas_render_items(RID p_to_render_target, Item *p_
+ 		// If we've overridden the render target's color texture, then we need
+ 		// to invert the Y axis, so 2D texture appear right side up.
+ 		// We're probably rendering directly to an XR device.
+-		float y_scale = texture_storage->render_target_get_override_color(p_to_render_target).is_valid() ? -2.0f : 2.0f;
++		// The same for a render target drawn straight to the window (direct to screen):
++		// nothing flips it afterwards.
++		bool upright = texture_storage->render_target_get_override_color(p_to_render_target).is_valid() || texture_storage->render_target_get_direct_to_screen(p_to_render_target);
++		float y_scale = upright ? -2.0f : 2.0f;
+ 
+ 		Transform3D screen_transform;
+ 		screen_transform.translate_local(-(ssize.width / 2.0f), -(ssize.height / 2.0f), 0.0f);
+@@ -577,6 +580,7 @@ void RasterizerCanvasGLES3::_render_items(RID p_to_render_target, int p_item_cou
+ 	GLES3::MaterialStorage *material_storage = GLES3::MaterialStorage::get_singleton();
+ 
+ 	canvas_begin(p_to_render_target, p_to_backbuffer, p_backbuffer_has_mipmaps);
++	const bool direct_to_screen = !p_to_backbuffer && GLES3::TextureStorage::get_singleton()->render_target_get_direct_to_screen(p_to_render_target);
+ 
+ 	if (p_item_count <= 0) {
+ 		// Nothing to draw, just call canvas_begin() to clear the render target and return.
+@@ -698,7 +702,12 @@ void RasterizerCanvasGLES3::_render_items(RID p_to_render_target, int p_item_cou
+ 			current_clip = state.canvas_instance_batches[i].clip;
+ 			if (current_clip) {
+ 				glEnable(GL_SCISSOR_TEST);
+-				glScissor(current_clip->final_clip_rect.position.x, current_clip->final_clip_rect.position.y, current_clip->final_clip_rect.size.x, current_clip->final_clip_rect.size.y);
++				Rect2 clip = current_clip->final_clip_rect;
++				if (direct_to_screen) {
++					// Drawn right side up: the clip's rows count from the other edge.
++					clip.position.y = GLES3::TextureStorage::get_singleton()->render_target_get_size(p_to_render_target).y - clip.position.y - clip.size.y;
++				}
++				glScissor(clip.position.x, clip.position.y, clip.size.x, clip.size.y);
+ 			} else {
+ 				glDisable(GL_SCISSOR_TEST);
+ 			}
+diff --git a/drivers/gles3/rasterizer_scene_gles3.cpp b/drivers/gles3/rasterizer_scene_gles3.cpp
+index d02525e..19a0a69 100644
+--- a/drivers/gles3/rasterizer_scene_gles3.cpp
++++ b/drivers/gles3/rasterizer_scene_gles3.cpp
+@@ -2559,6 +2559,13 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 		glFrontFace(GL_CW);
+ 	}
+ 	_render_shadows(&render_data, screen_size);
++	if (rt && rt->direct_to_screen && flip_y) {
++		// Rendering straight into the window's framebuffer: nothing flips it afterwards, so it
++		// is drawn right side up. The winding changes after the shadow pass, which draws into
++		// the shadow atlas exactly as it does for any other target.
++		flip_y = false;
++		glFrontFace(GL_CW);
++	}
+ 
+ 	_setup_lights(&render_data, true, render_data.directional_light_count, render_data.omni_light_count, render_data.spot_light_count, render_data.area_light_count, render_data.directional_shadow_count);
+ 	_setup_environment(&render_data, is_reflection_probe, screen_size, flip_y, clear_color, false);
+@@ -2769,7 +2776,10 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
+ 	scene_state.set_gl_depth_func(GL_GEQUAL);
+ 
+ 	{
+-		GLuint db = GL_COLOR_ATTACHMENT0;
++		// The window's own framebuffer (0, a direct-to-screen target) names its colour buffer
++		// GL_BACK; GL_COLOR_ATTACHMENT0 is an error there and would leave the depth pre-pass's
++		// GL_NONE in place, so nothing would be drawn.
++		GLuint db = fbo == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0;
+ 		glDrawBuffers(1, &db);
+ 	}
+ 
+diff --git a/servers/rendering/renderer_viewport.cpp b/servers/rendering/renderer_viewport.cpp
+index 8098fea..ea52e7a 100644
+--- a/servers/rendering/renderer_viewport.cpp
++++ b/servers/rendering/renderer_viewport.cpp
+@@ -949,6 +949,11 @@ void RendererViewport::draw_viewports(bool p_swap_buffers) {
+ 					}
+ 					blits->push_back(blit);
+ 				}
++			} else if (vp->viewport_to_screen != DisplayServerEnums::INVALID_WINDOW_ID && RSG::rasterizer->is_opengl()) {
++				// Rendered directly to the window: there is nothing to blit, but the frame
++				// still has to be presented. OpenGL swaps per window after its blit above,
++				// so without this a direct-to-screen window never shows a new frame.
++				RSG::rasterizer->gl_end_frame(p_swap_buffers);
+ 			}
+ 		}
+ 
+-- 
+2.43.0
+

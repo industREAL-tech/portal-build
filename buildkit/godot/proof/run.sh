@@ -43,6 +43,21 @@ render_stock() {
         return
     fi
     mkdir -p "$out"
+    # STOCK_TEMPLATE=<unpatched x86_64 release template of the same Godot revision>: stock is that
+    # template running the same PCK (needed when the patches sit on another revision than the
+    # official editor's).
+    if [ -n "${STOCK_TEMPLATE:-}" ]; then
+        cp "$STOCK_TEMPLATE" "$work/bin/stock.x86_64" && chmod +x "$work/bin/stock.x86_64"
+        cp "$work/bin/proof.pck" "$work/bin/stock.pck"
+        docker run --rm --entrypoint sh --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e LIBGL_ALWAYS_SOFTWARE=1 -e PROOF_OUT=/w/img/stock \
+            -v "$work:/w" "$image" -c '
+                set -eu
+                timeout 300 xvfb-run -a -s "-screen 0 512x384x24" \
+                    /w/bin/stock.x86_64 --rendering-driver opengl3 --rendering-method gl_compatibility
+            ' || { echo "stock render failed" >&2; return 1; }
+        return
+    fi
     docker run --rm --entrypoint sh --user "$(id -u):$(id -g)" -e HOME=/tmp \
         -e LIBGL_ALWAYS_SOFTWARE=1 -e PROOF_OUT=/w/img/stock \
         -v "$work:/w" "$image" -c '

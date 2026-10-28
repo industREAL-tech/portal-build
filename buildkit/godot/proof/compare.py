@@ -198,7 +198,9 @@ def check_c(all_imgs, sc_imgs, cases, manifest):
         print("  C: %s max abs channel diff per row = %s, background %d" % (c, row_diff, bg_diff))
         if _rows_max_diff(a, s, rows, "F") > 0:
             bad.append("%s: row F (lit) differs (max %d)" % (c, _rows_max_diff(a, s, rows, "F")))
-        if bg_diff > 0:
+        # With glow, the glow of the now exact unshaded colours spreads onto the background
+        # around them (seen: max 1/255, within 17 px of a quad); without glow nothing may change.
+        if bg_diff > (1 if "glow1" in c else 0):
             bad.append("%s: background differs (max %d)" % (c, bg_diff))
         # Rows A-C: every changed region must now equal the expected input exactly. On a
         # floating-point (hdr_) target the read-back is not the 8-bit output, so only report.
@@ -226,6 +228,21 @@ def check_c(all_imgs, sc_imgs, cases, manifest):
             # either side (llvmpipe: 7.65 -> 7, 229.5 -> 230), so allow 1.
             if err_all > 1:
                 bad.append("%s row D %s: changed but %d off its 8-bit value %s" % (c, info["c"], err_all, exp.tolist()))
+    # Decals change the albedo in linear space: under a decal patch 3 must stay off, so those
+    # pixels may not change at all; and the decal must have rendered, or the case proves nothing.
+    if "decal" in rows:
+        x0, y0, x1, y1 = rows["decal"]["quads"][0]
+        for c in cases:
+            if not c.startswith("decal_") or c not in all_imgs or c not in sc_imgs:
+                continue
+            d = int(np.abs(all_imgs[c][y0:y1, x0:x1] - sc_imgs[c][y0:y1, x0:x1]).max())
+            base = c[len("decal_"):]
+            drawn = base in all_imgs and np.any(all_imgs[c][y0:y1, x0:x1] != all_imgs[base][y0:y1, x0:x1])
+            print("  C: %s: under the decal max diff m_all vs m_sc = %d; decal drawn: %s" % (c, d, "yes" if drawn else "no"))
+            if d > 0:
+                bad.append("%s: pixels under the decal changed (max %d)" % (c, d))
+            if not drawn:
+                bad.append("%s: the decal did not render; the case proves nothing" % c)
     if not differing:
         print("  C: no images differ between m_all and m_sc")
     else:

@@ -54,11 +54,15 @@ var _rows: Dictionary = {}
 
 # The light exists in every case so lit rows are deterministic.
 var _dir_light: DirectionalLight3D
+var _decal: Decal
 var _world_env: WorldEnvironment
 var _env: Environment
 
 
 func _ready() -> void:
+	if not OS.get_environment("PROOF_BENCH").is_empty():
+		_bench()
+		return
 	var out := OS.get_environment("PROOF_OUT")
 	if out.is_empty():
 		printerr("PROOF_OUT is required")
@@ -99,7 +103,9 @@ func _ready() -> void:
 		# hdr_<case>: the same case on a floating-point (HDR 2D) render target.
 		var hdr: bool = case_name.begins_with("hdr_")
 		get_viewport().use_hdr_2d = hdr
-		var base: String = case_name.trim_prefix("hdr_")
+		# decal_<case>: the same case with a decal over the first four row B quads.
+		_decal.visible = case_name.begins_with("decal_")
+		var base: String = case_name.trim_prefix("hdr_").trim_prefix("decal_")
 		if base == "noenv":
 			_world_env.environment = null
 		else:
@@ -155,6 +161,10 @@ func _build_cases() -> Array:
 					cases.append("%s_e%.1f_fog%d_glow%d" % [tm[0], exp, 1 if fog else 0, 1 if glow else 0])
 	# The cases where the sRGB round trip is skipped, again on a floating-point render target.
 	cases.append_array(["hdr_noenv", "hdr_linear_e1.0_fog0_glow0", "hdr_linear_e1.0_fog1_glow0"])
+	# A float target with glow: effects run in post with a luminance multiplier of 1.0.
+	cases.append("hdr_linear_e1.0_fog0_glow1")
+	# Decals change the albedo in linear space, so the round trip must stay for those quads.
+	cases.append_array(["decal_noenv", "decal_linear_e1.0_fog0_glow0"])
 	return cases
 
 
@@ -207,6 +217,7 @@ func _xpos(i: int, n: int) -> float:
 
 
 func _build_rows() -> void:
+	_build_decal()
 	_build_row_a()
 	_build_row_b()
 	_build_row_c()
@@ -257,6 +268,23 @@ func _build_row_a() -> void:
 				c = Color(i / 255.0, (255 - i) / 255.0, ((i * 7) % 256) / 255.0)
 			regions.append([x0, y0, x1, y1, _col8(c)])
 	_rows["A"] = {"quads": [_rect_px(0.0, (ROW_A[0] + ROW_A[1]) * 0.5, 16.0, 2.0)], "regions": regions}
+
+
+# A decal over row B's first four quads (it projects along its local -Y, turned to face -Z).
+func _build_decal() -> void:
+	var img := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	img.fill(Color8(200, 40, 40, 255))
+	_decal = Decal.new()
+	_decal.texture_albedo = ImageTexture.create_from_image(img)
+	_decal.albedo_mix = 0.5
+	_decal.size = Vector3(4.0, 2.0, 1.0)
+	_decal.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	var cy := (ROW_B[0] + ROW_B[1]) * 0.5
+	_decal.position = Vector3(-6.0, cy, 0.0)
+	_decal.visible = false
+	add_child(_decal)
+	var r := _rect_px(-6.0, cy, 4.0, 1.0)
+	_rows["decal"] = {"quads": [[r[0], r[1], r[2], r[3]]]}
 
 
 func _build_row_b() -> void:
@@ -408,3 +436,49 @@ func _build_row_f() -> void:
 
 func _col8(c: Color) -> Array:
 	return [int(round(c.r * 255.0)), int(round(c.g * 255.0)), int(round(c.b * 255.0))]
+
+
+# PROOF_BENCH=<frames>: time full screens instead of rendering the cases. Uncapped, V-Sync off;
+# for each material, two full-screen quads, frames timed after a 60-frame warm-up; one
+# "bench:" line per material. Driver-level sanity only (on llvmpipe it measures the CPU).
+func _bench() -> void:
+	var frames := maxi(int(OS.get_environment("PROOF_BENCH")), 60)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+	_make_camera()
+	var env := WorldEnvironment.new()
+	env.environment = Environment.new()
+	env.environment.background_mode = Environment.BG_COLOR
+	env.environment.background_color = Color8(30, 30, 30)
+	add_child(env)
+	var light := _make_directional_light()
+	var mats := {}
+	var unshaded := StandardMaterial3D.new()
+	unshaded.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	unshaded.albedo_color = Color8(42, 37, 34)
+	mats["unshaded"] = unshaded
+	var lit := StandardMaterial3D.new()
+	lit.albedo_color = Color8(200, 100, 50)
+	mats["lit"] = lit
+	for mname: String in mats:
+		var nodes: Array[MeshInstance3D] = []
+		for layer in 2:
+			var mesh := QuadMesh.new()
+			mesh.size = Vector2(W, H)
+			mesh.material = mats[mname]
+			var q := MeshInstance3D.new()
+			q.mesh = mesh
+			q.position = Vector3(0.0, 0.0, 0.1 * layer)
+			add_child(q)
+			nodes.append(q)
+		for i in 60:
+			await get_tree().process_frame
+		var t0 := Time.get_ticks_usec()
+		for i in frames:
+			await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - t0) / 1000.0 / float(frames)
+		print("bench: material=%s layers=2 frames=%d avg_ms=%.3f ir_epilogue='%s'" % [mname, frames, ms, OS.get_environment("IR_EPILOGUE")])
+		for q in nodes:
+			q.queue_free()
+	light.queue_free()
+	get_tree().quit(0)

@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Godot: the official 4.7.2 x86_64 editor, for the export and the render alike, and OUR linux
 # arm64 release export template: Godot 4.7.2 with buildkit/godot/patches applied (the stock
-# scene shader's colour epilogue cost the panel's GPU ~11 ms of a full-screen frame; the three
-# patches take an unshaded full screen from 19.6 to 8.3 ms), built by
+# scene shader's colour epilogue cost the panel's GPU ~11 ms of a full-screen frame; 0001-0003
+# take an unshaded full screen from 19.6 to 8.3 ms, and 0004 lets the root viewport be drawn
+# straight to the window, 4.2 ms -- generated 3D apps turn that on, ui/platform_direct.gd), built by
 # buildkit/godot/build-template.sh and published as a release asset of this repository, pinned
 # by its sha256. The renders still come from the stock editor, so an unshaded colour there can
 # be up to 2/255 darker (7/255 in near-black) than on the panel, which shows it exactly. The official binary needs SSE4.2,
@@ -22,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # whose home is not root's.
 ARG GODOT_VERSION=4.7.2-stable
 ARG GODOT_TEMPLATE_DIR=4.7.2.stable
-ARG PANEL_TEMPLATE=https://github.com/industREAL-tech/portal-build/releases/download/godot-4.7.2-ir2/linux_release.arm64
-ARG PANEL_TEMPLATE_SHA256=8df2d1fd3ed9197c779d60117388da2e6ea54ffa97c78bf4c8460ab0223cf829
+ARG PANEL_TEMPLATE=https://github.com/industREAL-tech/portal-build/releases/download/godot-4.7.2-ir3/linux_release.arm64
+ARG PANEL_TEMPLATE_SHA256=7084d04ad20cea3fe93958fd27da2342de6f578f169cca344403905496775788
 RUN curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip \
     && unzip -q /tmp/godot.zip -d /tmp/godot \
     && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot \

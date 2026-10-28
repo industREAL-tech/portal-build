@@ -1,0 +1,19 @@
+; direct-to-screen proof scene (generated-app layout: IrView3D in a frame, 2D over 3D)
+config_version=5
+
+[application]
+config/name="dts-proof"
+run/main_scene="res://main.tscn"
+boot_splash/show_image=false
+
+[display]
+window/size/viewport_width=1280
+window/size/viewport_height=800
+window/stretch/mode="canvas_items"
+window/size/mode=3
+window/size/borderless=true
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+driver/depth_prepass/enable=false

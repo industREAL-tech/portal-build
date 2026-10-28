@@ -10,7 +10,7 @@ lit quads) under many Environment settings across several Godot binaries/configu
 
 1. Everything runs inside the portal-build Docker image (official Godot 4.7.2 editor, xvfb, Mesa llvmpipe):
 
-       ./run.sh <work-dir> <x86_64 release template built with ../measure/0004>
+       ./run.sh <work-dir> <x86_64 release template built with ../measure/0005>
 
    `<work-dir>` receives `project/`, `bin/` (imported PCK + copied measurement template) and
    `img/<config>/` renders. The measurement template must be the patched build's Linux x86_64
@@ -46,3 +46,5 @@ Patch 3 only acts when patches 1 and 2 are on.
 - D: clamping on every target gives the same pixels as clamping on float targets only (a
   normalized target clamps by itself), so the clamp, 0.5-0.7 ms on the panel, runs only there.
 - E: rows A-C match Forward+ exactly with patch 3 (stock: 7/255 off).
+- The same three changes ported to Godot master (e810f3f7a), against the unpatched master template: 67 cases
+  (adds a float target with glow and two decal cases) all pass; pixels under a decal never change.
