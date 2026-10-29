@@ -16,9 +16,24 @@ for a in sorted(glob.glob(os.path.join(d, "*-d0.png"))):
         print(f"{case:24s} SIZE {x.shape} vs {y.shape}"); bad += 1; continue
     diff = np.abs(x - y).max(axis=2)
     n = int((diff > 0).sum()); m = int(diff.max())
-    worst = max(worst, m)
     # a blank direct frame (the boot splash / one flat colour) is a failure whatever the diff
     flat = len(np.unique(y.reshape(-1, 3), axis=0)) <= 1
+    if case.startswith("msaa"):
+        # MSAA (patch 0005): the blit path renders upside down and flips at the end, so its
+        # sample pattern is mirrored and edge pixels get slightly different coverage, and it
+        # resolves at 10 bits where direct resolves at 8 (+-1). Pass: under 0.2 % of the pixels
+        # differ by more than 2, and the direct picture is antialiased (differs from direct
+        # without MSAA, the case's view-<case> render).
+        big = int((diff > 2).sum())
+        plain = os.path.join(d, "view-" + case.split("-", 1)[1] + "-d1.png")
+        aa = os.path.exists(plain) and bool(
+            (np.asarray(Image.open(plain).convert("RGB")).astype(int) != y).any())
+        ok = big < 0.002 * diff.size and aa and not flat
+        print(f"{case:24s} diff_px={n:7d} max={m:3d} over2={big:5d} antialiased={aa}"
+              f"{'' if ok else '  FAIL'}")
+        bad += 0 if ok else 1
+        continue
+    worst = max(worst, m)
     print(f"{case:24s} diff_px={n:7d} max={m:3d}{'  DIRECT FLAT' if flat else ''}")
     if m > 1 or flat:
         bad += 1

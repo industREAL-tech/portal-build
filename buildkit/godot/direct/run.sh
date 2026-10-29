@@ -44,6 +44,11 @@ for d in 0 1; do
     for c in view full fog; do
         shot "/w/img/view-$c-d$d.png" /w/view/bin/view.x86_64 PROOF_CASE=$c BENCH_DIRECT=$d
     done
+    # 3D MSAA (patch 0005): 4x set after direct-to-screen, and before it (reconfigured on the switch)
+    for c in view full; do
+        shot "/w/img/msaa4-$c-d$d.png" /w/view/bin/view.x86_64 PROOF_CASE=$c BENCH_DIRECT=$d PROOF_MSAA=4
+        shot "/w/img/msaa4first-$c-d$d.png" /w/view/bin/view.x86_64 PROOF_CASE=$c BENCH_DIRECT=$d PROOF_MSAA=4 PROOF_MSAA_FIRST=1
+    done
     if [ -n "$bench" ]; then
         for v in empty fill-1 fill-2 fill-half fill-1-2d tris-100k-small tris-100k-full fill-4 \
                 fill-1-shader fill-1-const fill-1-lit fill-1-lambert fill-1-vertex fill-1-nodepth \

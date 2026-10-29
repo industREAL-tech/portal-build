@@ -16,9 +16,9 @@ archs=${*:-arm64}
 GODOT_TAG=4.7.2-stable
 GODOT_COMMIT=ed1daf0bf001b61586d9930840f2f1394092c079
 IMAGE=industreal/godot-template-build:2026.05.x-1
-# The runtime's name, in Engine.get_version_info().build ("4.7.2.stable.industreal_ir3"): a
+# The runtime's name, in Engine.get_version_info().build ("4.7.2.stable.industreal_ir4"): a
 # generated app turns direct-to-screen on only on a runtime that has patch 0004 (ir3 on).
-BUILD_NAME=industreal_ir3
+BUILD_NAME=industreal_ir4
 
 src="$out/work/godot"
 if [ ! -d "$src" ]; then
@@ -38,7 +38,7 @@ for arch in $archs; do
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e BUILD_NAME="$BUILD_NAME" -v "$src:/src" -v "$out:/out" -w /src "$IMAGE" sh -c "
         set -e
         export PATH=$sdk/bin:\$PATH
-        scons -j\$(nproc) platform=linuxbsd arch=$arch target=template_release production=yes \
+        nice -n 10 scons -j\$(nproc) platform=linuxbsd arch=$arch target=template_release production=yes \
             accesskit=no progress=no warnings=no
         cp bin/godot.linuxbsd.template_release.$arch /out/linux_release.$arch"
 done

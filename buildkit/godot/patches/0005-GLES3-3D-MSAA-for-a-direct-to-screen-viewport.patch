@@ -1,0 +1,138 @@
+From 350ceadeeed15a848b7272760f01be1be6af5233 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zal=C3=A1n=20Demeter?= <zalan.demeter@industreal.tech>
+Date: Thu, 29 Oct 2026 11:26:46 +0100
+Subject: [PATCH] GLES3: 3D MSAA for a direct-to-screen viewport
+
+A viewport drawn straight into the window (patch 0004) had no working 3D MSAA:
+the multisampled buffer took the render target's RGB10_A2 format, which a
+resolve blit into the window's framebuffer refuses, and the resolve also
+copied the multisampled depth buffer, a slow path on the HMI panel's GPU
+(Vivante GC7000UL: 470 ms a frame with stock MSAA through the render target).
+
+- A direct-to-screen viewport's 3D buffers take an 8-bit colour format: RGB565
+  for a 565 window, else RGBA8 -- also for an X888 window, as a 4x RGB8 buffer
+  cost ~4 ms more a full-screen frame than RGBA8 on the panel.
+- The MSAA buffer is resolved by a colour-only blit straight into the window,
+  then invalidated (OpenGL ES), as a native test on the panel measured fastest:
+  4x MSAA + resolve 3.5 ms a full screen against 1.15 ms without, where an
+  EGL_SAMPLES window surface cost 5.9 ms.
+- Switching direct-to-screen on or off reconfigures the 3D buffers.
+
+Nothing changes for a viewport that is not direct to screen.
+---
+ drivers/gles3/rasterizer_scene_gles3.cpp      | 14 ++++++++-
+ .../storage/render_scene_buffers_gles3.cpp    | 31 +++++++++++++++++++
+ .../storage/render_scene_buffers_gles3.h      |  1 +
+ servers/rendering/renderer_viewport.cpp       |  3 ++
+ 4 files changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gles3/rasterizer_scene_gles3.cpp b/drivers/gles3/rasterizer_scene_gles3.cpp
+index 19a0a69..09f0e0d 100644
+--- a/drivers/gles3/rasterizer_scene_gles3.cpp
++++ b/drivers/gles3/rasterizer_scene_gles3.cpp
+@@ -3060,7 +3060,19 @@ void RasterizerSceneGLES3::_render_post_processing(const RenderDataGLES3 *p_rend
+ 			} else {
+ 				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_rt);
+ 			}
+-			glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, internal_size.x, internal_size.y, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
++			if (fbo_int == 0 && texture_storage->render_target_get_direct_to_screen(render_target)) {
++				// Resolved straight into the window (direct to screen). Colour only: nothing after
++				// the 3D reads the window's depth, and resolving a multisampled depth buffer is a
++				// slow path on some GPUs. The multisampled buffers are then discarded, so a tiled
++				// GPU need not write them back to memory (OpenGL ES 3.0; desktop OpenGL only from 4.3).
++				glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, internal_size.x, internal_size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
++				if (!RasterizerUtilGLES3::is_gles_over_gl()) {
++					const GLenum discard[] = { GL_COLOR_ATTACHMENT0, GL_DEPTH_STENCIL_ATTACHMENT };
++					glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 2, discard);
++				}
++			} else {
++				glBlitFramebuffer(0, 0, internal_size.x, internal_size.y, 0, 0, internal_size.x, internal_size.y, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
++			}
+ 		}
+ 
+ 		// Rendered to intermediate buffer, must copy to our render target
+diff --git a/drivers/gles3/storage/render_scene_buffers_gles3.cpp b/drivers/gles3/storage/render_scene_buffers_gles3.cpp
+index 296206a..eabee9f 100644
+--- a/drivers/gles3/storage/render_scene_buffers_gles3.cpp
++++ b/drivers/gles3/storage/render_scene_buffers_gles3.cpp
+@@ -32,6 +32,7 @@
+ 
+ #ifdef GLES3_ENABLED
+ 
++#include "drivers/gles3/rasterizer_util_gles3.h"
+ #include "drivers/gles3/storage/config.h"
+ #include "drivers/gles3/storage/texture_storage.h"
+ #include "drivers/gles3/storage/utilities.h"
+@@ -155,6 +156,13 @@ void RenderSceneBuffersGLES3::configure(const RenderSceneBuffersConfiguration *p
+ 		color_format_size = 4;
+ 	}
+ 
++	if (render_target.is_valid() && texture_storage->render_target_get_direct_to_screen(render_target)) {
++		// Drawn straight into the window: an MSAA buffer is resolved by a blit into the window's
++		// own framebuffer, which needs the same colour format on both sides. The render target's
++		// format (RGB10_A2) is the one it had before it went direct and describes no buffer.
++		_use_window_color_format();
++	}
++
+ 	// Check our scaling mode
+ 	if (scaling_3d_mode != RSE::VIEWPORT_SCALING_3D_MODE_OFF && internal_size.x == 0 && internal_size.y == 0) {
+ 		// Disable, no size set.
+@@ -183,6 +191,29 @@ void RenderSceneBuffersGLES3::configure(const RenderSceneBuffersConfiguration *p
+ 	// We don't create our buffers right away because post effects can be made active at any time and change our buffer configuration.
+ }
+ 
++void RenderSceneBuffersGLES3::_use_window_color_format() {
++	GLint red_bits = 8;
++	// The window's back buffer is GL_BACK in OpenGL ES and GL_BACK_LEFT in desktop OpenGL.
++	GLenum back = RasterizerUtilGLES3::is_gles_over_gl() ? GL_BACK_LEFT : GL_BACK;
++	glBindFramebuffer(GL_FRAMEBUFFER, GLES3::TextureStorage::system_fbo);
++	glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, back, GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red_bits);
++
++	// An 8-bit window with or without alpha (8888 or X888) gets RGBA8: a 4x RGB8 buffer cost
++	// ~4 ms more a full-screen frame than RGBA8 on the HMI panel's GPU (Vivante GC7000UL,
++	// 2026-10-29), and the resolve blit into its X888 window stays fast.
++	color_format_size = 4;
++	if (red_bits == 5) {
++		color_internal_format = GL_RGB565;
++		color_format = GL_RGB;
++		color_type = GL_UNSIGNED_SHORT_5_6_5;
++		color_format_size = 2;
++	} else {
++		color_internal_format = GL_RGBA8;
++		color_format = GL_RGBA;
++		color_type = GL_UNSIGNED_BYTE;
++	}
++}
++
+ void RenderSceneBuffersGLES3::_check_render_buffers() {
+ 	GLES3::TextureStorage *texture_storage = GLES3::TextureStorage::get_singleton();
+ 	GLES3::Config *config = GLES3::Config::get_singleton();
+diff --git a/drivers/gles3/storage/render_scene_buffers_gles3.h b/drivers/gles3/storage/render_scene_buffers_gles3.h
+index 497c5d3..a4c83be 100644
+--- a/drivers/gles3/storage/render_scene_buffers_gles3.h
++++ b/drivers/gles3/storage/render_scene_buffers_gles3.h
+@@ -89,6 +89,7 @@ public:
+ 
+ private:
+ 	void _check_render_buffers();
++	void _use_window_color_format();
+ 	void _clear_msaa3d_buffers();
+ 	void _clear_intermediate_buffers();
+ 	void _clear_back_buffers();
+diff --git a/servers/rendering/renderer_viewport.cpp b/servers/rendering/renderer_viewport.cpp
+index ea52e7a..8971693 100644
+--- a/servers/rendering/renderer_viewport.cpp
++++ b/servers/rendering/renderer_viewport.cpp
+@@ -1200,6 +1200,9 @@ void RendererViewport::viewport_set_render_direct_to_screen(RID p_viewport, bool
+ 
+ 	RSG::texture_storage->render_target_set_direct_to_screen(viewport->render_target, p_enable);
+ 	viewport->viewport_render_direct_to_screen = p_enable;
++	// The 3D buffers take their colour format from where the picture goes (the render target or
++	// the window), so an MSAA buffer made for one is wrong for the other.
++	_configure_3d_render_buffers(viewport);
+ 
+ 	// if attached to screen already, setup screen size and position, this needs to happen after setting flag to avoid an unnecessary buffer allocation
+ 	if (RSG::rasterizer->is_low_end() && viewport->viewport_to_screen_rect != Rect2() && p_enable) {
+-- 
+2.43.0
+

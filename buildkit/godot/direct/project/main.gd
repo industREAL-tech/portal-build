@@ -7,14 +7,23 @@ extends Control
 # translucent bar over the 3D and a clipping control (scissor). No depth pre-pass, as the
 # generator's 60 fps modes.
 
+# PROOF_MSAA=2|4|8 turns 3D MSAA on (../patches/0005), after direct-to-screen as a generated
+# application does (the platform's autoload goes first), or before it with PROOF_MSAA_FIRST=1.
 func _ready() -> void:
 	var direct := OS.get_environment("BENCH_DIRECT").strip_edges() == "1"
+	var msaa: int = {"2": Viewport.MSAA_2X, "4": Viewport.MSAA_4X, "8": Viewport.MSAA_8X}.get(
+			OS.get_environment("PROOF_MSAA").strip_edges(), Viewport.MSAA_DISABLED)
+	var msaa_first := OS.get_environment("PROOF_MSAA_FIRST").strip_edges() == "1"
+	if msaa_first:
+		get_viewport().msaa_3d = msaa
 	if direct:
 		RenderingServer.viewport_set_render_direct_to_screen(get_viewport().get_viewport_rid(), true)
+	if not msaa_first:
+		get_viewport().msaa_3d = msaa
 	var case := OS.get_environment("PROOF_CASE").strip_edges()
 	if case == "":
 		case = "view"
-	print("dts-proof: case=%s direct=%d" % [case, int(direct)])
+	print("dts-proof: case=%s direct=%d msaa=%d first=%d" % [case, int(direct), msaa, int(msaa_first)])
 
 	var world := Node3D.new()
 	world.name = "World"
