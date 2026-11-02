@@ -66,7 +66,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=entropy /tmp/hmi-fixed-entropy.so /usr/local/lib/
 COPY build/hmi_build.py imagefmt.py /opt/hmi-build/
 COPY base/base-1.json /opt/hmi-build/base/
+# EnableWriteXorExecute=0: on an arm64 Linux host this x86_64 container runs under QEMU, where
+# .NET's W^X JIT mappings crash dotnet (SIGSEGV); without them the build is the same, image ID
+# for image ID (checked on an Orin, 2026-11-02).
 ENV HMI_BASE_DIR=/opt/hmi-build/base \
-    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_EnableWriteXorExecute=0
 WORKDIR /src
 ENTRYPOINT ["python3", "/opt/hmi-build/hmi_build.py"]
