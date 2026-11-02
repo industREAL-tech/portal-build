@@ -56,6 +56,18 @@ def _put(url: str, path: Path) -> dict:
         sys.exit(f"hmi-build: the upload failed: {exc}")
 
 
+# Godot gives every node of an imported model, and every scene it converts, a random ID from a
+# generator seeded by getentropy(): the same tree built to a different image each time. Its
+# import and export run with that call fixed (fixed_entropy.c), and nothing else does.
+FIXED_ENTROPY = Path(os.environ.get("HMI_FIXED_ENTROPY", "/usr/local/lib/hmi-fixed-entropy.so"))
+
+
+def _step_env(env: dict, step: dict) -> dict:
+    if step["argv"][:1] == ["godot"] and FIXED_ENTROPY.is_file():
+        return {**env, "LD_PRELOAD": str(FIXED_ENTROPY)}
+    return env
+
+
 def _steps(src: Path, spec: dict) -> bool:
     """The archetype's build steps, as the server ran them: an advisory step may fail."""
     env = {**os.environ, "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"}
@@ -70,7 +82,8 @@ def _steps(src: Path, spec: dict) -> bool:
             print("(this step's ERROR lines -- fonts, the theme, fontconfig -- are expected on "
                   "a first import; only the final exit status counts)", flush=True)
         try:
-            p = subprocess.Popen(step["argv"], cwd=cwd, env=env, stdout=subprocess.PIPE,
+            p = subprocess.Popen(step["argv"], cwd=cwd, env=_step_env(env, step),
+                                 stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True, errors="replace")
         except OSError as exc:
             print(f"[{step['name']}] could not run: {exc}", flush=True)

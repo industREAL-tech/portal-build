@@ -4,6 +4,13 @@
 # the pinned portal-base exactly as the server checks it.
 #
 # Build context: buildkit/ with app/imagefmt.py copied in (buildkit/make-build-image.sh).
+# The fixed entropy for Godot's build steps (fixed_entropy.c): built apart, so no compiler ships.
+FROM debian:trixie-slim AS entropy
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY build/fixed_entropy.c /tmp/
+RUN gcc -O2 -shared -fPIC -nostdlib -o /tmp/hmi-fixed-entropy.so /tmp/fixed_entropy.c
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 libfontconfig1 libfreetype6 curl unzip ca-certificates \
@@ -50,6 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcursor1 libxinerama1 libxrandr2 libxi6 \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=entropy /tmp/hmi-fixed-entropy.so /usr/local/lib/
 COPY build/hmi_build.py imagefmt.py /opt/hmi-build/
 COPY base/base-1.json /opt/hmi-build/base/
 ENV HMI_BASE_DIR=/opt/hmi-build/base \
