@@ -5,13 +5,15 @@
 #
 # Build context: buildkit/ with app/imagefmt.py copied in (buildkit/make-build-image.sh).
 # The fixed entropy for Godot's build steps (fixed_entropy.c): built apart, so no compiler ships.
-FROM debian:trixie-slim AS entropy
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS entropy
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY build/fixed_entropy.c /tmp/
 RUN gcc -O2 -shared -fPIC -nostdlib -o /tmp/hmi-fixed-entropy.so /tmp/fixed_entropy.c
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0
+# The toolchain is pinned: the SDK by digest (a rebuild of this image keeps the compiler, so
+# the same tree keeps building to the same image), Godot by its release checksums.
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 libfontconfig1 libfreetype6 curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -33,7 +35,10 @@ ARG GODOT_VERSION=4.7.2-stable
 ARG GODOT_TEMPLATE_DIR=4.7.2.stable
 ARG PANEL_TEMPLATE=https://github.com/industREAL-tech/portal-build/releases/download/godot-4.7.2-ir4/linux_release.arm64
 ARG PANEL_TEMPLATE_SHA256=e6ce28a69d422aca6113dc8a4d663ec24253ab50cdf56635a692b0eac19a9ea1
+ARG GODOT_EDITOR_SHA512=9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+ARG GODOT_TEMPLATES_SHA512=ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
 RUN curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip \
+    && echo "${GODOT_EDITOR_SHA512}  /tmp/godot.zip" | sha512sum -c - \
     && unzip -q /tmp/godot.zip -d /tmp/godot \
     && install -m 0755 /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot \
     && ln -s godot /usr/local/bin/godot-display \
@@ -42,6 +47,7 @@ ENV XDG_DATA_HOME=/opt/godot-data
 RUN t=/opt/godot-data/godot/export_templates/${GODOT_TEMPLATE_DIR} \
     && mkdir -p $t \
     && curl -fsSL -o /tmp/templates.tpz https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz \
+    && echo "${GODOT_TEMPLATES_SHA512}  /tmp/templates.tpz" | sha512sum -c - \
     && unzip -q -j /tmp/templates.tpz templates/linux_release.arm64 templates/version.txt -d $t \
     && rm -f /tmp/templates.tpz \
     && test "$(cat $t/version.txt)" = "${GODOT_TEMPLATE_DIR}" \
